@@ -81,6 +81,41 @@ def read_file(file_path: str, encoding: str = "utf-8") -> str:
         return f"错误：编码失败，尝试其他编码如 gbk 或 utf-8-sig"
     except Exception as e:
         return f"读取失败：{str(e)}"
+
+def save_file(file_path: str, content: str, encoding: str = "utf-8", mode: str = "w") -> str:
+    """保存内容到文件"""
+    try:
+        # 安全检查：限制可写入的目录
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        allowed_dirs = [
+            os.path.join(script_dir, "output"),
+            os.path.join(script_dir, "reports")
+        ]
+        full_path = os.path.abspath(file_path)
+
+        # 检查路径是否在允许的目录中
+        is_allowed = False
+        for allowed_dir in allowed_dirs:
+            if full_path == allowed_dir or full_path.startswith(allowed_dir + os.sep):
+                is_allowed = True
+                break
+
+        if not is_allowed:
+            return f"错误：不允许写入路径 {file_path}（仅限 output/ 和 reports/ 目录）"
+
+        # 自动创建目录
+        dir_name = os.path.dirname(full_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+
+        # 写入文件
+        with open(full_path, mode, encoding=encoding) as f:
+            f.write(content)
+
+        return f"成功保存到 {file_path} ({len(content)} 字符)"
+
+    except Exception as e:
+        return f"保存失败：{str(e)}"
 # ==================== 工具定义 ====================
 tools = [
     {
@@ -124,6 +159,37 @@ tools = [
                     }
                 },
                 "required": ["file_path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_file",
+            "description": "将内容保存到文件。支持保存分析结果、报告等文本内容。仅限 output/ 和 reports/ 目录。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "文件路径，如 output/report.txt 或 reports/daily.md"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "要保存的内容"
+                    },
+                    "encoding": {
+                        "type": "string",
+                        "description": "文件编码，默认 utf-8",
+                        "default": "utf-8"
+                    },
+                    "mode": {
+                        "type": "string",
+                        "description": "写入模式：w=覆盖, a=追加",
+                        "default": "w"
+                    }
+                },
+                "required": ["file_path", "content"]
             }
         }
     }
@@ -215,6 +281,23 @@ def run_agent(user_message: str, max_iterations: int = 5) -> str:
                     "content": result
                 })
 
+            elif function_name == "save_file":
+                result = save_file(**arguments)
+
+                # 调用工具后
+                print(f"[DEBUG] 工具返回 - 长度: {len(result)}, 失败: {result.startswith('错误：')}")
+                if result.startswith("错误：") or result.startswith("保存失败："):
+                    print(f"[DEBUG] 保存失败详情: {result}")
+                    return f"抱歉，保存遇到问题：{result}"
+                else:
+                    print(f"[DEBUG] {result}")
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result
+                })
+
     print("[DEBUG] 达到最大迭代次数")
     return "达到最大迭代次数，未能完成"
 
@@ -267,12 +350,34 @@ def test_function_calling():
     #result = run_agent("搜索一下 当前国家数量（不包括地区，联合国承认的国家）")
     print(f"\nAgent 回复:\n{result}")
 
+def test_save_file():
+    """测试 save_file 工具"""
+    print("\n=== 测试 save_file 工具 ===")
+
+    output_file = "reports/test_report.txt"
+    # 测试 Agent 保存搜索结果
+    result = run_agent(
+        f"将'这是最新的agent报告'保存到 {output_file}"
+    )
+    print(f"\nAgent 回复:\n{result}")
+
+    # 验证文件是否创建
+    import os
+    if os.path.exists(output_file):
+        print("\n✓ 文件创建成功")
+        with open(output_file, encoding='utf-8') as f:
+            content = f.read()
+            print(f"文件内容预览:\n{content[:300]}...")
+    else:
+        print(f"\n文件：{output_file}创建失败")
+
 def run_tests():
     """运行所有测试"""
     #test_llm_connectivity()
     #test_web_search()
     #test_function_calling()
-    test_read_file()
+    #test_read_file()
+    test_save_file()
 
 if __name__ == "__main__":
     run_tests()
