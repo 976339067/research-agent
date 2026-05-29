@@ -47,6 +47,40 @@ def web_search(query: str, max_results: int = 5) -> str:
             return json.dumps(results, ensure_ascii=False, indent=2)
     except Exception as e:
         return f"搜索失败：{str(e)}"
+
+def read_file(file_path: str, encoding: str = "utf-8") -> str:
+    """读取本地文件内容"""
+    try:
+        # 安全检查：限制可访问的目录
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        allowed_dirs = [os.path.join(script_dir, "data")]
+        full_path = os.path.abspath(file_path)
+
+        # 检查路径是否在允许的目录中（防止路径遍历攻击）
+        is_allowed = False
+        for allowed_dir in allowed_dirs:
+            # 确保路径匹配且下一字符是路径分隔符或路径结束
+            if full_path == allowed_dir or full_path.startswith(allowed_dir + os.sep):
+                is_allowed = True
+                break
+
+        if not is_allowed:
+            return f"错误：不允许访问路径 {file_path}（仅限脚本目录下的 data 子目录）"
+
+        # 文件大小限制（1MB）
+        file_size = os.path.getsize(full_path)
+        if file_size > 1024 * 1024:
+            return f"错误：文件过大 ({file_size} 字节)，超过 1MB 限制"
+
+        with open(full_path, 'r', encoding=encoding) as f:
+            content = f.read()
+            return f"成功读取 {file_path} ({len(content)} 字符)\n\n{content}"
+    except FileNotFoundError:
+        return f"错误：文件不存在 {file_path}"
+    except UnicodeDecodeError:
+        return f"错误：编码失败，尝试其他编码如 gbk 或 utf-8-sig"
+    except Exception as e:
+        return f"读取失败：{str(e)}"
 # ==================== 工具定义 ====================
 tools = [
     {
@@ -68,6 +102,28 @@ tools = [
                     }
                 },
                 "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "读取本地文件内容。支持 txt, md, json, csv 等文本文件。仅限脚本目录下的 data 子目录，文件大小限制 1MB。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "文件路径，可以是相对路径或绝对路径"
+                    },
+                    "encoding": {
+                        "type": "string",
+                        "description": "文件编码，默认 utf-8",
+                        "default": "utf-8"
+                    }
+                },
+                "required": ["file_path"]
             }
         }
     }
@@ -141,6 +197,24 @@ def run_agent(user_message: str, max_iterations: int = 5) -> str:
                     "content": result
                 })
 
+            elif function_name == "read_file":
+                result = read_file(**arguments)
+
+                # 调用工具后
+                print(f"[DEBUG] 工具返回 - 长度: {len(result)}, 失败: {result.startswith('错误：')}")
+                if result.startswith("错误："):
+                    print(f"[DEBUG] 读取失败详情: {result}")
+                    return f"抱歉，读取遇到问题：{result}"
+                else:
+                    result_preview = result[:200] if len(result) > 200 else result
+                    print(f"[DEBUG] 结果预览: {result_preview}...")
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result
+                })
+
     print("[DEBUG] 达到最大迭代次数")
     return "达到最大迭代次数，未能完成"
 
@@ -165,6 +239,27 @@ def test_web_search():
     result = web_search("AI Agent 最新发展", max_results=3)
     print(result)
 
+def test_read_file():
+    """测试 read_file 工具"""
+    print("\n=== 测试 read_file 工具 ===")
+
+    # 先创建测试文件
+    test_file = "test_data.txt"
+    test_content = "随着全球碳中和目标的推进，固态电池被认为是下一代电动汽车动力电池的核心方向。与传统锂离子电池相比，固态电池用固态电解质替代了易燃的液态电解质，理论上可将能量密度提升至500Wh/kg以上，同时大幅降低热失控风险。根据行业报告，2025年全球固态电池市场规模约为12亿美元，预计到2030年将增长至72亿美元，年复合增长率达43%。然而，固态电池仍面临两大技术瓶颈：一是固态电解质与电极之间的界面阻抗较高，影响快充性能；二是制造成本居高不下，目前约为液态锂电池的4-6倍。尽管丰田、宁德时代等头部企业已宣布2027年前后实现小规模量产，但大规模商业化应用可能仍需五年以上时间。总体来看，固态电池前景广阔，但技术突破和降本路径仍是行业关注的焦点。"
+    with open(test_file, 'w', encoding='utf-8') as f:
+        f.write(test_content)
+
+    print(f"已创建测试文件: {test_file}")
+
+    # 直接测试 read_file 函数
+    result = read_file(test_file)
+    print(f"\n直接调用 read_file():\n{result}")
+
+    # 测试通过 Agent 调用
+    print("\n--- 通过 Agent 调用 ---")
+    result = run_agent(f"读取 {test_file} 并总结内容")
+    print(f"\nAgent 回复:\n{result}")
+
 def test_function_calling():
     """测试 function calling"""
     print("\n=== 测试 Function Calling ===")
@@ -176,7 +271,8 @@ def run_tests():
     """运行所有测试"""
     #test_llm_connectivity()
     #test_web_search()
-    test_function_calling()
+    #test_function_calling()
+    test_read_file()
 
 if __name__ == "__main__":
     run_tests()
