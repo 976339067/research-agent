@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 from openai import OpenAI
 
@@ -116,6 +117,244 @@ def save_file(file_path: str, content: str, encoding: str = "utf-8", mode: str =
 
     except Exception as e:
         return f"保存失败：{str(e)}"
+
+def execute_python(
+    code_str: str = None,
+    script_file: str = None,
+    input_path: str = None,
+    output_path: str = None,
+    timeout: int = 30
+) -> str:
+    """
+    在 Docker 容器中安全地执行 Python 代码进行数据处理。
+
+    ══════════════════════════════════════════════════════════════════════════════
+    设计目的 (DESIGN PURPOSE)
+    ══════════════════════════════════════════════════════════════════════════════
+
+    本函数为研究助手 Agent 提供安全的代码执行能力，解决以下问题：
+
+    1. 核心问题 (WHY - 为什么需要)
+       - 用户需要数据处理、计算分析、格式转换等计算任务
+       - 直接在主机执行 Python 代码存在安全风险（文件访问、系统调用等）
+       - 需要一种既安全又灵活的代码执行方式
+
+    2. 目标用户 (WHO - 谁使用)
+       - 主要使用者：研究助手 Agent（LLM）代表用户执行代码
+       - 最终受益者：通过自然语言描述需求的研究人员
+       - 使用方式：Agent 通过 Function Calling 自动调用此函数
+
+    3. 应用场景 (WHEN & WHERE - 何时何地)
+       - 何时：当用户请求需要计算、分析、处理数据的任务时
+       - 何地：在隔离的 Docker 容器中执行，与主机环境完全隔离
+
+    4. 解决方案 (WHAT - 是什么)
+       - 使用 Docker 容器技术实现代码沙箱执行
+       - 通过严格的资源限制和安全配置保护主机
+       - 提供简单易用的接口，支持代码字符串和脚本文件两种方式
+
+    5. 安全隔离 (HOW - 如何实现)
+       - 网络隔离：容器无法访问网络，防止数据泄露
+       - 资源限制：256MB 内存、单核 CPU，防止资源耗尽
+       - 权限控制：非 root 用户、禁止提权
+       - 文件隔离：只能访问指定的 data/（读）和 output/（写）目录
+
+    ══════════════════════════════════════════════════════════════════════════════
+
+    功能说明：
+    - 使用 Docker 容器隔离执行环境，确保安全性
+    - 支持两种代码传递方式：字符串代码或脚本文件
+    - 支持文件读写操作（需指定 input_path/output_path）
+    - 限制资源使用：内存 256MB、单核 CPU、无网络访问
+
+    何时使用：
+    - 数学计算和统计分析
+    - 字符串处理和数据转换
+    - 文件内容处理（配合 input_path/output_path）
+    - 数据分析和格式转换
+
+    何时不使用：
+    - 需要网络操作的任务（容器已禁用网络）
+    - 需要长时间运行的计算（受 timeout 限制）
+    - 需要访问系统资源或敏感文件
+    - 处理超大数据（受内存限制）
+
+    参数：
+        code_str (str, optional): Python 代码字符串。与 script_file 二选一。
+                               用于简单计算、数据处理等场景。
+                               示例: "print(sum(range(1, 101)))"
+
+        script_file (str, optional): Python 脚本文件路径。与 code_str 二选一。
+                                 脚本必须存放在 data/ 目录下。
+                                 用于复杂处理、已有脚本等场景。
+                                 示例: "process_data.py"
+
+        input_path (str, optional): 输入文件路径。文件必须在 data/ 目录下。
+                                    代码中通过 /app/input/{filename} 访问。
+                                    示例: "data/input.txt" → 代码中用 /app/input/input.txt
+
+        output_path (str, optional): 输出文件路径。文件将保存到 output/ 目录。
+                                     代码中通过 /app/output/{filename} 写入。
+                                     示例: "output/result.txt" → 代码中用 /app/output/result.txt
+
+        timeout (int, optional): 执行超时时间（秒）。默认 30 秒。
+                                超时后容器将被强制终止。
+
+    返回：
+        str: 执行结果字符串
+            - 成功时：返回标准输出内容
+            - 失败时：返回错误信息（包含原因和详情）
+            - 超时时：返回超时提示
+            - 无输出时：返回"执行成功，无输出"
+
+    用法示例：
+
+    示例1: 简单数学计算
+        execute_python(code_str="print(sum(range(1, 101)))")
+        # 返回: "执行成功\\n\\n输出:\\n5050"
+
+    示例2: 字符串处理
+        execute_python(code_str='text="Hello"; print(text.upper())')
+        # 返回: "执行成功\\n\\n输出:\\nHELLO"
+
+    示例3: 读取文件并处理
+        execute_python(
+            code_str='''
+with open('/app/input/data.txt') as f:
+    lines = f.readlines()
+print(f"行数: {len(lines)}")
+''',
+            input_path="data/data.txt"
+        )
+
+    示例4: 处理并保存结果
+        execute_python(
+            code_str='''
+import json
+with open('/app/input/data.json') as f:
+    data = json.load(f)
+result = {'count': len(data), 'sum': sum(data)}
+with open('/app/output/result.json', 'w') as f:
+    json.dump(result, f)
+print("处理完成")
+''',
+            input_path="data/data.json",
+            output_path="output/result.json"
+        )
+
+    示例5: 使用脚本文件
+        execute_python(
+            script_file="analyzer.py",
+            input_path="data/raw.txt",
+            output_path="output/analyzed.txt"
+        )
+
+    安全特性：
+    - 容器网络隔离（--network none）
+    - 内存限制 256MB（--memory 256m）
+    - 单核 CPU 限制（--cpus 1）
+    - 非 root 用户运行（--user nobody）
+    - 禁止提权（--security-opt=no-new-privileges）
+    - 只读挂载输入目录（:ro）
+    - 读写挂载输出目录（:rw）
+
+    注意事项：
+    - Docker 必须已安装并运行
+    - python:3.13-slim 镜像会自动拉取（首次运行时）
+    - 代码执行时间超过 timeout 将被强制终止
+    - 输出内容大小建议控制在合理范围内
+    """
+    import subprocess
+
+    # ========== 参数验证 ==========
+    if not code_str and not script_file:
+        return "错误：必须提供 code_str 或 script_file 参数"
+    if code_str and script_file:
+        return "错误：code_str 和 script_file 只能提供一个"
+
+    try:
+        # ========== 获取项目路径 ==========
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # ========== 构建 Docker 基础命令 ==========
+        # 安全配置：网络隔离、资源限制、用户权限
+        docker_cmd = [
+            "docker", "run", "--rm",           # 自动删除容器
+            "--network", "none",               # 禁止网络访问
+            "--memory", "256m",                 # 内存限制 256MB
+            "--cpus", "1",                      # 单核 CPU
+            "--user", "nobody",                 # 非 root 用户
+            "--security-opt=no-new-privileges"  # 禁止提权
+        ]
+
+        # ========== 目录挂载配置 ==========
+        # 根据参数动态挂载目录，确保访问控制
+
+        if script_file:
+            # 脚本文件方式：挂载 data/ 目录作为代码目录（只读）
+            data_dir = os.path.join(script_dir, "data")
+            if os.path.exists(data_dir):
+                docker_cmd.append(f"-v {data_dir}:/app/code:ro")
+
+        if input_path:
+            # 输入文件：挂载 data/ 目录为只读输入目录
+            data_dir = os.path.join(script_dir, "data")
+            if os.path.exists(data_dir):
+                docker_cmd.append(f"-v {data_dir}:/app/input:ro")
+
+        if output_path:
+            # 输出文件：挂载 output/ 目录为读写输出目录
+            output_dir = os.path.join(script_dir, "output")
+            os.makedirs(output_dir, exist_ok=True)  # 确保输出目录存在
+            docker_cmd.append(f"-v {output_dir}:/app/output:rw")
+
+        # ========== 执行方式选择 ==========
+        if script_file:
+            # ========== 模式1: 执行脚本文件 ==========
+            script_safe_path = os.path.basename(script_file)  # 防止路径遍历
+            docker_cmd.extend([
+                "python:3.13-slim",           # 使用 Python 3.13 精简镜像
+                "python", f"/app/code/{script_safe_path}"
+            ])
+            result = subprocess.run(
+                docker_cmd,
+                timeout=timeout,
+                capture_output=True,             # 捕获标准输出和错误
+                text=True                        # 文本模式
+            )
+        else:
+            # ========== 模式2: 执行代码字符串 ==========
+            docker_cmd.extend([
+                "python:3.13-slim",
+                "python", "-c", code_str         # -c 后直接跟代码字符串
+            ])
+            result = subprocess.run(
+                docker_cmd,
+                timeout=timeout,
+                capture_output=True,
+                text=True
+            )
+
+        # ========== 结果处理与返回 ==========
+        if result.returncode == 0:
+            # 执行成功
+            output = result.stdout.strip()
+            if output:
+                return f"执行成功\n\n输出:\n{output}"
+            else:
+                return "执行成功，无输出"
+        else:
+            # 执行失败（非零退出码）
+            error = result.stderr.strip()
+            return f"执行失败（退出码 {result.returncode}）\n\n错误信息:\n{error}"
+
+    # ========== 异常处理 ==========
+    except subprocess.TimeoutExpired:
+        return f"执行超时（超过 {timeout} 秒）"
+    except FileNotFoundError:
+        return "错误：未找到 Docker，请确保 Docker 已安装并运行"
+    except Exception as e:
+        return f"执行失败：{str(e)}"
 # ==================== 工具定义 ====================
 tools = [
     {
@@ -190,6 +429,40 @@ tools = [
                     }
                 },
                 "required": ["file_path", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_python",
+            "description": "执行 Python 代码处理数据。支持两种方式：1) 直接传入代码字符串；2) 指定预写好的脚本文件。支持文件读写（需指定 input_path/output_path），禁止网络访问。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code_str": {
+                        "type": "string",
+                        "description": "Python 代码字符串（与 script_file 二选一）。用于简单计算和处理。"
+                    },
+                    "script_file": {
+                        "type": "string",
+                        "description": "Python 脚本文件路径（与 code_str 二选一）。脚本存放在 data/ 目录，用于复杂处理。"
+                    },
+                    "input_path": {
+                        "type": "string",
+                        "description": "输入文件路径（data/目录），如 'data/input.txt'。代码中通过 /app/input/ 访问"
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "输出文件路径（output/目录），如 'output/result.txt'。代码中通过 /app/output/ 访问"
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "执行超时时间（秒），默认 30",
+                        "default": 30
+                    }
+                },
+                "required": []
             }
         }
     }
@@ -298,6 +571,24 @@ def run_agent(user_message: str, max_iterations: int = 5) -> str:
                     "content": result
                 })
 
+            elif function_name == "execute_python":
+                result = execute_python(**arguments)
+
+                # 调用工具后
+                print(f"[DEBUG] 工具返回 - 长度: {len(result)}, 失败: {result.startswith('错误：') or result.startswith('执行失败')}")
+                if result.startswith("错误：") or result.startswith("执行失败"):
+                    print(f"[DEBUG] 执行失败详情: {result[:200]}...")
+                    return f"抱歉，执行遇到问题：{result}"
+                else:
+                    result_preview = result[:300] if len(result) > 300 else result
+                    print(f"[DEBUG] {result_preview}...")
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result
+                })
+
     print("[DEBUG] 达到最大迭代次数")
     return "达到最大迭代次数，未能完成"
 
@@ -371,13 +662,46 @@ def test_save_file():
     else:
         print(f"\n文件：{output_file}创建失败")
 
+def test_execute_python():
+    """测试 execute_python 工具"""
+    print("\n=== 测试 execute_python 工具 ===")
+
+    # 测试1: 直接调用函数（简单计算）
+    print("\n--- 测试1: 简单计算 ---")
+    result = execute_python(code_str="print('1+1=', 1+1); print('2*3=', 2*3)")
+    print(f"结果:\n{result}")
+
+    # 测试2: 复杂计算
+    print("\n--- 测试2: 复杂计算 ---")
+    code = """
+import math
+# 计算 1-100 的和
+total = sum(range(1, 101))
+print(f'1-100的和: {total}')
+
+# 计算圆周率
+print(f'圆周率: {math.pi:.6f}')
+
+# 生成列表
+squares = [x**2 for x in range(1, 6)]
+print(f'平方数: {squares}')
+"""
+    result = execute_python(code_str=code)
+    print(f"结果:\n{result}")
+
+    # 测试3: 字符串处理
+    print("\n--- 测试3: 字符串处理 ---")
+    result = execute_python(code_str='text="Hello World"; print(text.upper()); print(text.split())')
+    print(f"结果:\n{result}")
+
 def run_tests():
     """运行所有测试"""
     #test_llm_connectivity()
     #test_web_search()
     #test_function_calling()
     #test_read_file()
-    test_save_file()
+    #test_save_file()
+    test_execute_python()
 
 if __name__ == "__main__":
     run_tests()
