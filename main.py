@@ -12,10 +12,12 @@ load_dotenv()  # 这行必须在 os.getenv 之前
 # 从环境变量获取 API Key 和 Base URL（安全，不会泄露到 git）
 ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY")
 ZHIPU_BASE_URL = os.getenv("ZHIPU_BASE_URL")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 # 打印读入的变量，确定值没有问题
 #print("ZHIPU_API_KEY:", ZHIPU_API_KEY)
 #print("ZHIPU_BASE_URL:", ZHIPU_BASE_URL)
+#print("TAVILY_API_KEY:", TAVILY_API_KEY)
 
 # 环境变量检查：缺失时给出明确提示并退出
 if not ZHIPU_API_KEY:
@@ -26,10 +28,15 @@ if not ZHIPU_BASE_URL:
     print("错误：未设置环境变量 ZHIPU_BASE_URL")
     print("请执行：export ZHIPU_BASE_URL='https://open.bigmodel.cn/api/paas/v4/'")
     sys.exit(1)
+if not TAVILY_API_KEY:
+    print("错误：未设置环境变量 TAVILY_API_KEY")
+    print("请执行：export TAVILY_API_KEY='你的密钥'")
+    sys.exit(1)
 
 # 安全打印：只显示是否已设置，不暴露完整密钥
 print("ZHIPU_API_KEY 已设置:", ZHIPU_API_KEY[:8] + "..." if len(ZHIPU_API_KEY) > 8 else "***")
 print("ZHIPU_BASE_URL:", ZHIPU_BASE_URL)
+print("TAVILY_API_KEY 已设置:", TAVILY_API_KEY[:8] + "..." if len(TAVILY_API_KEY) > 8 else "***")
 
 # 创建客户端，使用环境变量中的 API Key
 client = OpenAI(
@@ -40,7 +47,7 @@ client = OpenAI(
 
 
 # ==================== 工具函数 ====================
-def web_search(query: str, max_results: int = 5) -> str:
+def web_search_with_ddgs(query: str, max_results: int = 5) -> str:
     """使用 DuckDuckGo 搜索网页"""
     try:
         with DDGS() as ddgs:
@@ -48,6 +55,24 @@ def web_search(query: str, max_results: int = 5) -> str:
             return json.dumps(results, ensure_ascii=False, indent=2)
     except Exception as e:
         return f"搜索失败：{str(e)}"
+
+def web_search_with_tavily(query: str, max_results: int = 5) -> str:
+    """使用 Tavily 搜索网页"""
+    try:
+        from tavily import TavilyClient
+        client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
+        response = client.search(
+            query=query,
+            max_results=max_results,
+            search_depth="basic"
+        )
+        return json.dumps(response, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"搜索失败：{str(e)}"
+
+def web_search(query: str, max_results: int = 5) -> str:
+    """使用 Tavily 搜索网页"""
+    return web_search_with_tavily(query, max_results)
 
 def read_file(file_path: str, encoding: str = "utf-8") -> str:
     """读取本地文件内容"""
@@ -699,6 +724,26 @@ print(f'平方数: {squares}')
     result = run_agent("用 Python 计算 1 到 100 的和，并计算 1 到 10 的平方数")
     print(f"Agent 回复:\n{result}")
 
+def test_full_research_workflow():
+    """测试完整调研工作流"""
+    print("\n=== 完整调研任务测试 ===")
+    print("任务：调研固态电池最新进展，生成分析报告")
+
+    # 创建初始数据文件
+    os.makedirs("data", exist_ok=True)
+    with open("data/battery_info.txt", "w", encoding="utf-8") as f:
+        f.write("固态电池技术背景：用固态电解质替代液态电解质，能量密度可提升至500Wh/kg以上。")
+
+    # 完整调研任务
+    result = run_agent(
+        "请完成以下调研任务："
+        "1. 搜索固态电池最新技术进展"
+        "2. 读取 data/battery_info.txt 作为背景资料"
+        "3. 用 Python 分析：假设能量密度从 300Wh/kg 提升到 500Wh/kg，计算提升百分比"
+        "4. 将完整分析报告保存到 reports/solid_state_battery.md"
+    )
+    print(f"\n最终报告:\n{result}")
+
 def run_tests():
     """运行所有测试"""
     #test_llm_connectivity()
@@ -706,7 +751,8 @@ def run_tests():
     #test_function_calling()
     #test_read_file()
     #test_save_file()
-    test_execute_python()
+    #test_execute_python()
+    test_full_research_workflow()
 
 if __name__ == "__main__":
     run_tests()
