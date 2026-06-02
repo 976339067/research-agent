@@ -694,6 +694,11 @@ print(f'平方数: {squares}')
     result = execute_python(code_str='text="Hello World"; print(text.upper()); print(text.split())')
     print(f"结果:\n{result}")
 
+    # 测试4: 通过 Agent 调用
+    print("\n--- 测试4: 通过 Agent 调用 ---")
+    result = run_agent("用 Python 计算 1 到 100 的和，并计算 1 到 10 的平方数")
+    print(f"Agent 回复:\n{result}")
+
 def run_tests():
     """运行所有测试"""
     #test_llm_connectivity()
