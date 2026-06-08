@@ -9,6 +9,16 @@
 研究助手 Agent 的目标是：用户只需用自然语言描述需求，
 Agent 自动完成搜索、分析、保存的全流程。
 
+## 技术选型
+
+| 选择 | 理由 |
+|------|------|
+| 智谱 GLM-4-Flash | 国内可访问、Function Calling 原生支持、成本低于 GPT-4 |
+| Tavily Search API | DuckDuckGo 频繁超时后迁移，为 AI Agent 优化的搜索结果，稳定性更高 |
+| DuckDuckGo（备用） | 保留原实现作为降级方案，免费、零配置 |
+| Docker 沙箱 | 安全执行 Agent 生成的 Python 代码，内存/网络/CPU 三隔离 |
+| 不依赖 Agent 框架 | 从零实现 ReAct 循环，深入理解原理后再考虑用框架提效 |
+
 ## 功能
 
 ### 本次实现（MVP）
